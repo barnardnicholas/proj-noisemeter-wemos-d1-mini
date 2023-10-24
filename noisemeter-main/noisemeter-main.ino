@@ -15,6 +15,8 @@ X509List cert(cert_ISRG_Root_X1);
   // Use WiFiClientSecure class to create TLS connection
   WiFiClientSecure client;
 
+const bool IS_CALIBRATION_MODE = false;
+
 const String REQUEST_PATH = "/ws/put";
 const int MAX_LEVEL_FLOAT = 1024;
 const float REFERENCE_LEVEL_PA = 0.00002; // lowest detectable level in Pascal
@@ -73,24 +75,23 @@ void loop() {
     // When the sample cache is full, take a reading and store it
   takeReading();
 
+if (!IS_CALIBRATION_MODE) {
 // If enough time has elapsed since last upload, attempt upload
-  // long now = millis();
-  // long msSinceLastUpload = now - lastUploadMillis;
-//  if (msSinceLastUpload >= uploadIntervalMS) {
-//    if (!client.connect(REQUEST_HOSTNAME, REQUEST_PORT)) {
-//      Serial.println("Wifi Client Connection failed");
-//      return;
-//    }
-//    String payload = createJSONPayload();
-//    uploadData(client, payload);
-//  } else {
-//    delay(100);
-//  }
-  } else {
-delay(100);
-  }
+  long now = millis();
+  long msSinceLastUpload = now - lastUploadMillis;
+ if (msSinceLastUpload >= uploadIntervalMS) {
+   if (!client.connect(REQUEST_HOSTNAME, REQUEST_PORT)) {
+     Serial.println("Wifi Client Connection failed");
+     return;
+   }
+   String payload = createJSONPayload();
+   uploadData(client, payload);
+ };
+};
+  };
 
-}
+delay(100);
+};
 
 /*
 ==============================================================================
@@ -216,7 +217,9 @@ void takeReading() {
     minReading = db;
   }
   numberOfReadings ++;
+  if (IS_CALIBRATION_MODE) {
    displayReading(micReading, db);
+  };
 };
 
 float getDbSplFromAudioMeasurement(int measurement) {
