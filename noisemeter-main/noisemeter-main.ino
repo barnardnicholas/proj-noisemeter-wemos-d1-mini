@@ -1,3 +1,5 @@
+#include <Wire.h>
+
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
@@ -7,45 +9,63 @@
 #include "secret.h"
 
 /*
-==============================================================================
-CONSTANTS & VARIABLES
-==============================================================================
+  ==============================================================================
+  CONSTANTS & VARIABLES
+  ==============================================================================
 */
+
+// SDA and SCL pins for the decibel meter module
+#define I2C_SDA                 D2
+#define I2C_SCL                 D1
+
+// I2C address for the module
+#define DBM_ADDR                0x48
+
+// Device registers
+#define   DBM_REG_VERSION       0x00
+#define   DBM_REG_ID3           0x01
+#define   DBM_REG_ID2           0x02
+#define   DBM_REG_ID1           0x03
+#define   DBM_REG_ID0           0x04
+#define   DBM_REG_SCRATCH       0x05
+#define   DBM_REG_CONTROL       0x06
+#define   DBM_REG_TAVG_HIGH     0x07
+#define   DBM_REG_TAVG_LOW      0x08
+#define   DBM_REG_RESET         0x09
+#define   DBM_REG_DECIBEL       0x0A
+#define   DBM_REG_MIN           0x0B
+#define   DBM_REG_MAX           0x0C
+#define   DBM_REG_THR_MIN       0x0D
+#define   DBM_REG_THR_MAX       0x0E
+#define   DBM_REG_HISTORY_0     0x14
+#define   DBM_REG_HISTORY_99    0x77
+
 X509List cert(cert_ISRG_Root_X1);
-  // Use WiFiClientSecure class to create TLS connection
-  WiFiClientSecure client;
+
+// Use WiFiClientSecure class to create TLS connection
+WiFiClientSecure client;
 
 const bool IS_CALIBRATION_MODE = false;
 
 const String REQUEST_PATH = "/ws/put";
-const int MAX_LEVEL_FLOAT = 1024;
-const float REFERENCE_LEVEL_PA = 0.00002; // lowest detectable level in Pascal
-const float MAX_LEVEL_PASCAL = 0.6325; // Max detectable level in pascal
-const int CALIBRATION_DB_SPL = 0; // -3
-const String DEVICE_ID = "nick2";
+
+const String DEVICE_ID = "nick3"; // With SPL meter hardware
 const unsigned long uploadIntervalMS = 60000 * 5; // Upload every 5 mins
 
-const int SAMPLE_CACHE_LENGTH = 10;
-int numberOfSamples = 0;
-int sampleCache[SAMPLE_CACHE_LENGTH]; // Store raw input data for smoothing
-
-int numberOfReadings = 0;
-float minReading = 0;
-float maxReading = 0;
+uint8_t minReading = 0;
+uint8_t maxReading = 0;
 unsigned long lastUploadMillis = 0;
+bool didInit = false;
 
 /*
-==============================================================================
-SETUP
-==============================================================================
+  ==============================================================================
+  SETUP
+  ==============================================================================
 */
 void setup() {
-  pinMode(A0, INPUT); // Set analog pin to input
-
-  for (int i = 0; i < SAMPLE_CACHE_LENGTH; i++) {
-    sampleCache[i] = 0;
-  }; // Set all sample points to 0
-
+  Serial.begin(9600);
+  Serial.println();
+  
   connectToWifi();
   configTime();
 
@@ -57,50 +77,88 @@ void setup() {
 }
 
 /*
-==============================================================================
-LOOP
-==============================================================================
+  ==============================================================================
+  LOOP
+  ==============================================================================
 */
 void loop() {
-  int micReading = analogRead(A0);
 
-  if (numberOfSamples == 0) {
-    // If no samples have been taken, init sample cache
-    initSampleCache(micReading);
-  } else {
-  updateSamples(micReading);
-  } // Always update samples
+    // Initialize I2C at 10kHz
+  Wire.begin (I2C_SDA, I2C_SCL, 10000);
 
-  if (numberOfSamples >= SAMPLE_CACHE_LENGTH) {
-    // When the sample cache is full, take a reading and store it
-  takeReading();
+  // Read ID registers
+  uint8_t id[4];
+  id[0] = dbmeter_readreg (DBM_REG_ID3);
+  id[1] = dbmeter_readreg (DBM_REG_ID2);
+  id[2] = dbmeter_readreg (DBM_REG_ID1);
+  id[3] = dbmeter_readreg (DBM_REG_ID0);
+//  Serial.printf ("Unique ID = %02X %02X %02X %02X\r\n", id[3], id[2], id[1], id[0]);
 
-if (!IS_CALIBRATION_MODE) {
-// If enough time has elapsed since last upload, attempt upload
-  long now = millis();
-  long msSinceLastUpload = now - lastUploadMillis;
- if (msSinceLastUpload >= uploadIntervalMS) {
-   if (!client.connect(REQUEST_HOSTNAME, REQUEST_PORT)) {
-     Serial.println("Wifi Client Connection failed");
-     return;
-   }
-   String payload = createJSONPayload();
-   uploadData(client, payload);
- };
-};
+  uint8_t db, dbmin, dbmax;
+  // Read decibel, min and max
+  db = dbmeter_readreg (DBM_REG_DECIBEL);
+  if (db < 255) {
+    dbmin = dbmeter_readreg (DBM_REG_MIN);
+    dbmax = dbmeter_readreg (DBM_REG_MAX);
+  }
+
+  if (!didInit) {
+    resetReading(db);
+    didInit = true;
+  }
+
+  if (IS_CALIBRATION_MODE) {
+    displayReading(db, dbmin, dbmax);
+  }
+
+  if (db > maxReading) {
+    maxReading = db;
+  }
+  if (db < minReading) {
+    minReading = db;
+  }
+  if (IS_CALIBRATION_MODE) {
+    displayReading(db, dbmin, dbmax);
   };
 
-delay(100);
+    if (!IS_CALIBRATION_MODE) {
+      // If enough time has elapsed since last upload, attempt upload
+      long now = millis();
+      long msSinceLastUpload = now - lastUploadMillis;
+      if (msSinceLastUpload >= uploadIntervalMS) {
+        if (!client.connect(REQUEST_HOSTNAME, REQUEST_PORT)) {
+          Serial.println("Wifi Client Connection failed");
+          return;
+        }
+        String payload = createJSONPayload();
+        uploadData(client, payload);
+          long now = millis();
+  lastUploadMillis = now;
+  resetReading(db);
+      };
+  };
+
+  delay(100);
 };
 
 /*
-==============================================================================
-FUNCTIONS
-==============================================================================
+  ==============================================================================
+  FUNCTIONS
+  ==============================================================================
 */
+
+
+uint8_t dbmeter_readreg (uint8_t regaddr)
+{
+  Wire.beginTransmission (DBM_ADDR);
+  Wire.write (regaddr);
+  Wire.endTransmission();
+  Wire.requestFrom (DBM_ADDR, 1);
+  delay (10);
+  return Wire.read();
+} // Function to read a register from decibel meter
+
 void connectToWifi() {
-  Serial.begin(9600);
-  Serial.println();
   Serial.print("Connecting to ");
   Serial.println(NETWORK_SSID);
   WiFi.mode(WIFI_STA);
@@ -133,19 +191,19 @@ void configTime() {
 
 String createJSONPayload() {
   // Prepare JSON document
-    DynamicJsonDocument doc(2048);
-    doc["parent"] = "/Bases/nm1";
-    doc["data"]["type"] = "comand";
-    doc["data"]["version"] = "1.0";
-    doc["data"]["contents"][0]["Type"] = "Noise";
-    doc["data"]["contents"][0]["Min"] = minReading;
-    doc["data"]["contents"][0]["Max"] = maxReading;
-    doc["data"]["contents"][0]["DeviceID"] = "nick2";
+  DynamicJsonDocument doc(2048);
+  doc["parent"] = "/Bases/nm1";
+  doc["data"]["type"] = "comand";
+  doc["data"]["version"] = "1.0";
+  doc["data"]["contents"][0]["Type"] = "Noise";
+  doc["data"]["contents"][0]["Min"] = minReading;
+  doc["data"]["contents"][0]["Max"] = maxReading;
+  doc["data"]["contents"][0]["DeviceID"] = DEVICE_ID;
 
-    // Serialize JSON document
-    String json;
-    serializeJson(doc, json);
-    return json;
+  // Serialize JSON document
+  String json;
+  serializeJson(doc, json);
+  return json;
 }; // Assemble JSON payload from global variables
 
 void uploadData(WiFiClientSecure client, String json) {
@@ -154,13 +212,13 @@ void uploadData(WiFiClientSecure client, String json) {
   Serial.println(REQUEST_PATH);
 
   String request = String("POST ") + REQUEST_PATH + " HTTP/1.1\r\n" +
-  "Host: " + REQUEST_HOSTNAME + "\r\n" +
-  "User-Agent: ESP8266\r\n" +
-  "Connection: close\r\n" +
-  "Authorization: Token " + API_TOKEN + "\r\n" +
-  "Content-Type: application/json\r\n" +
-  "Content-Length: " + json.length() + "\r\n\r\n" +
-  json + "\r\n";
+                   "Host: " + REQUEST_HOSTNAME + "\r\n" +
+                   "User-Agent: ESP8266\r\n" +
+                   "Connection: close\r\n" +
+                   "Authorization: Token " + API_TOKEN + "\r\n" +
+                   "Content-Type: application/json\r\n" +
+                   "Content-Length: " + json.length() + "\r\n\r\n" +
+                   json + "\r\n";
 
   Serial.println(request);
   client.print(request);
@@ -184,106 +242,19 @@ void uploadData(WiFiClientSecure client, String json) {
   Serial.println(line);
   Serial.println("==========");
   Serial.println("Closing connection");
-
-  long now = millis();
-  lastUploadMillis = now;
-  resetReading();
 }; // Given a serialized JSON payload, upload the data to webcomand
 
-void displayReading(float micReading, float db) {
-  int noOfDots = floor(micReading / 10);
-  String vuMeter;
-  vuMeter = vuMeter + micReading + " ";
-  vuMeter = vuMeter + floor(db);
-  vuMeter = vuMeter + "dB: ";
-  for (int i = 0; i < noOfDots; i++) {
-    vuMeter = vuMeter + "#";
-  };
-  Serial.println(vuMeter);
+void displayReading(uint8_t db, uint8_t dbmin, uint8_t dbmax) {
+  Serial.printf ("dB reading = %03d \t [MIN: %03d \tMAX: %03d] \r\n", db, dbmin, dbmax);
 };
 
-void takeReading() {
-  int micReading = getAverageReading();
-  float db = getDbSplFromAudioMeasurement(micReading);
-
-  if (numberOfReadings == 0) {
-     minReading = db;
-     maxReading = db;
-  };
-  if (db > maxReading) {
-    maxReading = db;
-  }
-  if (db < minReading) {
-    minReading = db;
-  }
-  numberOfReadings ++;
-  if (IS_CALIBRATION_MODE) {
-   displayReading(micReading, db);
-  };
-};
-
-float getDbSplFromAudioMeasurement(int measurement) {
-  if (measurement <= 0) {
-    // No valid level detected
-    return 0;
-  }
-  float denominator = MAX_LEVEL_FLOAT / MAX_LEVEL_PASCAL;
-  float pressure = measurement / denominator;
-  float dbSpl = 20 * log10 (pressure / REFERENCE_LEVEL_PA);
-  return dbSpl + CALIBRATION_DB_SPL;
-};
-
-void resetReading() {
+void resetReading(uint8_t db) {
   Serial.println("Resetting...");
   Serial.println("Min: " + String(minReading));
   Serial.println("Max: " + String(maxReading));
-  Serial.println("numberOfReadings: " + String(numberOfReadings));
-  numberOfReadings = 0;
-  minReading = 0;
-  maxReading = 0;
+  minReading = db;
+  maxReading = db;
   Serial.println("Reset complete");
   Serial.println("Min: " + String(minReading));
   Serial.println("Max: " + String(maxReading));
-  Serial.println("numberOfReadings: " + String(numberOfReadings));
 };
-
-// Initialize readings cache - set all values to current reading
-void initSampleCache (int reading) {
-  numberOfSamples++;
-  for (int i = 0; i < SAMPLE_CACHE_LENGTH; i++) {
-    sampleCache[i] = reading;
-  }
-}
-
-// Add latest reading to cache, move others along
-void updateSamples (int reading) {
-  if (numberOfSamples < SAMPLE_CACHE_LENGTH) {
-    numberOfSamples++;
-  }
-  int newArray[SAMPLE_CACHE_LENGTH];
-  newArray[0] = reading;
-  for (int i = 1; i < SAMPLE_CACHE_LENGTH; i++) {
-    newArray[i] = sampleCache[i - 1];
-  }
-  for (int i = 0; i < SAMPLE_CACHE_LENGTH; i++) {
-    sampleCache[i] = newArray[i];
-  }
-//   Serial.print(sampleCache[0]);
-//  Serial.print(", ");
-//  Serial.print(sampleCache[1]);
-//  Serial.print(", ");
-//  Serial.print(sampleCache[2]);
-//  Serial.print(", ");
-//  Serial.print(sampleCache[3]);
-//  Serial.print(", ");
-//  Serial.println(sampleCache[4]);
-}
-
-int getAverageReading() {
-  int sum = 0;
-  for (int i = 0; i < SAMPLE_CACHE_LENGTH; i++) {
-    sum = sum + sampleCache[i];
-  };
-  int averageReading = sum / SAMPLE_CACHE_LENGTH;
-  return averageReading;
-}
