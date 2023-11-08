@@ -7,25 +7,25 @@
 #include "secret.h"
 
 /*
-==============================================================================
-CONSTANTS & VARIABLES
-==============================================================================
+  ==============================================================================
+  CONSTANTS & VARIABLES
+  ==============================================================================
 */
 X509List cert(cert_ISRG_Root_X1);
-  // Use WiFiClientSecure class to create TLS connection
-  WiFiClientSecure client;
+// Use WiFiClientSecure class to create TLS connection
+WiFiClientSecure client;
 
-const bool IS_CALIBRATION_MODE = false;
+const bool IS_CALIBRATION_MODE = true;
 
 const String REQUEST_PATH = "/ws/put";
 const int MAX_LEVEL_FLOAT = 1024;
 const float REFERENCE_LEVEL_PA = 0.00002; // lowest detectable level in Pascal
 const float MAX_LEVEL_PASCAL = 0.6325; // Max detectable level in pascal
 const int CALIBRATION_DB_SPL = 0; // -3
-const String DEVICE_ID = "nick2";
+const String DEVICE_ID = "nick4";
 const unsigned long uploadIntervalMS = 60000 * 5; // Upload every 5 mins
 
-const int SAMPLE_CACHE_LENGTH = 10;
+const int SAMPLE_CACHE_LENGTH = 100;
 int numberOfSamples = 0;
 int sampleCache[SAMPLE_CACHE_LENGTH]; // Store raw input data for smoothing
 
@@ -34,10 +34,11 @@ float minReading = 0;
 float maxReading = 0;
 unsigned long lastUploadMillis = 0;
 
+
 /*
-==============================================================================
-SETUP
-==============================================================================
+  ==============================================================================
+  SETUP
+  ==============================================================================
 */
 void setup() {
   pinMode(A0, INPUT); // Set analog pin to input
@@ -57,46 +58,49 @@ void setup() {
 }
 
 /*
-==============================================================================
-LOOP
-==============================================================================
+  ==============================================================================
+  LOOP
+  ==============================================================================
 */
 void loop() {
   int micReading = analogRead(A0);
+//  if (IS_CALIBRATION_MODE) {
+//    Serial.println(micReading);
+//  }
 
   if (numberOfSamples == 0) {
     // If no samples have been taken, init sample cache
     initSampleCache(micReading);
   } else {
-  updateSamples(micReading);
+    updateSamples(micReading);
   } // Always update samples
 
   if (numberOfSamples >= SAMPLE_CACHE_LENGTH) {
     // When the sample cache is full, take a reading and store it
-  takeReading();
+    takeReading();
 
-if (!IS_CALIBRATION_MODE) {
-// If enough time has elapsed since last upload, attempt upload
-  long now = millis();
-  long msSinceLastUpload = now - lastUploadMillis;
- if (msSinceLastUpload >= uploadIntervalMS) {
-   if (!client.connect(REQUEST_HOSTNAME, REQUEST_PORT)) {
-     Serial.println("Wifi Client Connection failed");
-     return;
-   }
-   String payload = createJSONPayload();
-   uploadData(client, payload);
- };
-};
+    if (!IS_CALIBRATION_MODE) {
+      // If enough time has elapsed since last upload, attempt upload
+      long now = millis();
+      long msSinceLastUpload = now - lastUploadMillis;
+      if (msSinceLastUpload >= uploadIntervalMS) {
+        if (!client.connect(REQUEST_HOSTNAME, REQUEST_PORT)) {
+          Serial.println("Wifi Client Connection failed");
+          return;
+        }
+        String payload = createJSONPayload();
+        uploadData(client, payload);
+      };
+    };
   };
 
-delay(100);
+//  delay(100);
 };
 
 /*
-==============================================================================
-FUNCTIONS
-==============================================================================
+  ==============================================================================
+  FUNCTIONS
+  ==============================================================================
 */
 void connectToWifi() {
   Serial.begin(9600);
@@ -133,19 +137,19 @@ void configTime() {
 
 String createJSONPayload() {
   // Prepare JSON document
-    DynamicJsonDocument doc(2048);
-    doc["parent"] = "/Bases/nm1";
-    doc["data"]["type"] = "comand";
-    doc["data"]["version"] = "1.0";
-    doc["data"]["contents"][0]["Type"] = "Noise";
-    doc["data"]["contents"][0]["Min"] = minReading;
-    doc["data"]["contents"][0]["Max"] = maxReading;
-    doc["data"]["contents"][0]["DeviceID"] = "nick2";
+  DynamicJsonDocument doc(2048);
+  doc["parent"] = "/Bases/nm1";
+  doc["data"]["type"] = "comand";
+  doc["data"]["version"] = "1.0";
+  doc["data"]["contents"][0]["Type"] = "Noise";
+  doc["data"]["contents"][0]["Min"] = minReading;
+  doc["data"]["contents"][0]["Max"] = maxReading;
+  doc["data"]["contents"][0]["DeviceID"] = "nick2";
 
-    // Serialize JSON document
-    String json;
-    serializeJson(doc, json);
-    return json;
+  // Serialize JSON document
+  String json;
+  serializeJson(doc, json);
+  return json;
 }; // Assemble JSON payload from global variables
 
 void uploadData(WiFiClientSecure client, String json) {
@@ -154,13 +158,13 @@ void uploadData(WiFiClientSecure client, String json) {
   Serial.println(REQUEST_PATH);
 
   String request = String("POST ") + REQUEST_PATH + " HTTP/1.1\r\n" +
-  "Host: " + REQUEST_HOSTNAME + "\r\n" +
-  "User-Agent: ESP8266\r\n" +
-  "Connection: close\r\n" +
-  "Authorization: Token " + API_TOKEN + "\r\n" +
-  "Content-Type: application/json\r\n" +
-  "Content-Length: " + json.length() + "\r\n\r\n" +
-  json + "\r\n";
+                   "Host: " + REQUEST_HOSTNAME + "\r\n" +
+                   "User-Agent: ESP8266\r\n" +
+                   "Connection: close\r\n" +
+                   "Authorization: Token " + API_TOKEN + "\r\n" +
+                   "Content-Type: application/json\r\n" +
+                   "Content-Length: " + json.length() + "\r\n\r\n" +
+                   json + "\r\n";
 
   Serial.println(request);
   client.print(request);
@@ -207,8 +211,8 @@ void takeReading() {
   float db = getDbSplFromAudioMeasurement(micReading);
 
   if (numberOfReadings == 0) {
-     minReading = db;
-     maxReading = db;
+    minReading = db;
+    maxReading = db;
   };
   if (db > maxReading) {
     maxReading = db;
@@ -217,9 +221,9 @@ void takeReading() {
     minReading = db;
   }
   numberOfReadings ++;
-  if (IS_CALIBRATION_MODE) {
-   displayReading(micReading, db);
-  };
+    if (IS_CALIBRATION_MODE) {
+     displayReading(micReading, db);
+    };
 };
 
 float getDbSplFromAudioMeasurement(int measurement) {
@@ -268,15 +272,15 @@ void updateSamples (int reading) {
   for (int i = 0; i < SAMPLE_CACHE_LENGTH; i++) {
     sampleCache[i] = newArray[i];
   }
-//   Serial.print(sampleCache[0]);
-//  Serial.print(", ");
-//  Serial.print(sampleCache[1]);
-//  Serial.print(", ");
-//  Serial.print(sampleCache[2]);
-//  Serial.print(", ");
-//  Serial.print(sampleCache[3]);
-//  Serial.print(", ");
-//  Serial.println(sampleCache[4]);
+  //   Serial.print(sampleCache[0]);
+  //  Serial.print(", ");
+  //  Serial.print(sampleCache[1]);
+  //  Serial.print(", ");
+  //  Serial.print(sampleCache[2]);
+  //  Serial.print(", ");
+  //  Serial.print(sampleCache[3]);
+  //  Serial.print(", ");
+  //  Serial.println(sampleCache[4]);
 }
 
 int getAverageReading() {
